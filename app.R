@@ -284,8 +284,16 @@ server <- function(input, output, session) {
   })
 
   training_accuracy <- reactive({
-    accuracy(training_models()) |>
+    training_models() |>
+      augment() |>
       as_tibble() |>
+      group_by(Varietal, .model) |>
+      summarise(
+        RMSE = sqrt(mean(.resid^2, na.rm = TRUE)),
+        MAE = mean(abs(.resid), na.rm = TRUE),
+        MAPE = mean(abs(.resid / Sales), na.rm = TRUE) * 100,
+        .groups = "drop"
+      ) |>
       transmute(
         Varietal,
         Model = .model,
@@ -295,17 +303,48 @@ server <- function(input, output, session) {
         MAPE
       )
   })
-
+  
   validation_accuracy <- reactive({
-    accuracy(validation_forecasts(), validation_data()) |>
+    forecast_values <- validation_forecasts() |>
       as_tibble() |>
-      transmute(
+      select(
         Varietal,
+        Month,
         Model = .model,
+        Forecast = .mean
+      )
+    
+    actual_values <- validation_data() |>
+      as_tibble() |>
+      select(
+        Varietal,
+        Month,
+        Actual = Sales
+      )
+    
+    forecast_values |>
+      left_join(
+        actual_values,
+        by = c("Varietal", "Month")
+      ) |>
+      group_by(Varietal, Model) |>
+      summarise(
+        RMSE = sqrt(
+          mean((Actual - Forecast)^2, na.rm = TRUE)
+        ),
+        MAE = mean(
+          abs(Actual - Forecast),
+          na.rm = TRUE
+        ),
+        MAPE = mean(
+          abs((Actual - Forecast) / Actual),
+          na.rm = TRUE
+        ) * 100,
+        .groups = "drop"
+      ) |>
+      mutate(
         Window = "Validation",
-        RMSE,
-        MAE,
-        MAPE
+        .before = RMSE
       )
   })
 
@@ -350,6 +389,7 @@ server <- function(input, output, session) {
 
   output$season_plot <- renderPlot({
     dat <- filtered_data() |>
+      as_tibble() |>
       mutate(
         MonthNum = lubridate::month(as.Date(Month))
       ) |>
