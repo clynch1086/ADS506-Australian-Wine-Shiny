@@ -1,0 +1,142 @@
+---
+title: "Australian Wine Sales — Static Forecasting Mockup"
+format: html
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+library(fpp3)
+
+wine_wide <- readr::read_csv(
+  "data/AustralianWines.csv",
+  na = "*",
+  show_col_types = FALSE
+)
+
+names(wine_wide) <- trimws(names(wine_wide))
+
+wines <- wine_wide |>
+  mutate(
+    Month = yearmonth(
+      as.Date(paste0("01-", Month), format = "%d-%b-%y")
+    )
+  ) |>
+  pivot_longer(
+    -Month,
+    names_to = "Varietal",
+    values_to = "Sales"
+  ) |>
+  arrange(Varietal, Month) |>
+  group_by(Varietal) |>
+  mutate(
+    Sales = if (anyNA(Sales)) {
+      approx(
+        which(!is.na(Sales)),
+        Sales[!is.na(Sales)],
+        xout = seq_along(Sales),
+        rule = 2
+      )$y
+    } else Sales
+  ) |>
+  ungroup() |>
+  as_tsibble(index = Month, key = Varietal)
+```
+
+## Data visualization
+
+```{r}
+selected <- wines |>
+  filter(Varietal %in% c("sparkling", "Dry white"))
+
+selected |>
+  autoplot(Sales) +
+  facet_wrap(vars(Varietal), scales = "free_y") +
+  labs(
+    title = "Monthly Australian wine sales",
+    x = NULL,
+    y = "Sales"
+  )
+```
+
+## Train / validation split
+
+```{r}
+train_end <- yearmonth("1992 Dec")
+
+training <- selected |>
+  filter(Month <= train_end)
+
+validation <- selected |>
+  filter(Month > train_end)
+```
+
+## Fit TSLM, ETS, and ARIMA
+
+```{r}
+fit <- training |>
+  model(
+    TSLM = TSLM(Sales ~ trend() + season()),
+    ETS = ETS(Sales),
+    ARIMA = ARIMA(Sales)
+  )
+
+fit
+```
+
+## Training accuracy
+
+```{r}
+accuracy(fit) |>
+  select(Varietal, .model, RMSE, MAE, MAPE)
+```
+
+## Validation accuracy
+
+```{r}
+validation_fc <- fit |>
+  forecast(
+    new_data = validation |>
+      select(Varietal, Month)
+  )
+
+accuracy(validation_fc, validation) |>
+  select(Varietal, .model, RMSE, MAE, MAPE)
+```
+
+## Validation forecast comparison
+
+```{r}
+validation_fc |>
+  autoplot(selected, level = c(80, 95)) +
+  facet_wrap(vars(Varietal), scales = "free_y") +
+  labs(
+    title = "Validation forecasts",
+    x = NULL,
+    y = "Sales"
+  )
+```
+
+## Future forecast
+
+```{r}
+final_fit <- selected |>
+  model(
+    TSLM = TSLM(Sales ~ trend() + season()),
+    ETS = ETS(Sales),
+    ARIMA = ARIMA(Sales)
+  )
+
+future_fc <- final_fit |>
+  forecast(h = 12)
+
+future_fc |>
+  autoplot(selected, level = c(80, 95)) +
+  facet_wrap(vars(Varietal), scales = "free_y") +
+  labs(
+    title = "12-month future forecast",
+    x = NULL,
+    y = "Sales"
+  )
+```
